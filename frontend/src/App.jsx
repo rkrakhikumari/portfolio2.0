@@ -32,8 +32,7 @@ export default function Portfolio() {
     setLoading(true);
     
     try {
-      const response = await fetch('http://localhost:8000/api/contact', {
-        method: 'POST',
+const response = await fetch('https://portfolio2-0-tchb.vercel.app/api/contact', {        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
