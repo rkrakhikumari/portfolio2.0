@@ -1,12 +1,10 @@
-# main.py - FastAPI Backend with Email Notifications
+# main.py - FastAPI Backend (Fixed for Vercel - In-Memory Storage)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from datetime import datetime
-import json
 import os
-from pathlib import Path
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -17,10 +15,20 @@ load_dotenv()
 
 app = FastAPI(title="Portfolio Contact API")
 
+# In-memory storage (replaces file system)
+messages_db = []
+message_counter = 0
+
 # Enable CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173","https://portfolio2-0-one-delta.vercel.app", "*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "https://portfolio2-0-one-delta.vercel.app",
+        "*"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,46 +40,27 @@ class ContactMessage(BaseModel):
     email: EmailStr
     message: str
 
-# File path for storing messages
-MESSAGES_FILE = Path("messages.json")
-
-def load_messages():
-    """Load messages from JSON file"""
-    if MESSAGES_FILE.exists():
-        with open(MESSAGES_FILE, "r") as f:
-            return json.load(f)
-    return []
-
-def save_messages(messages):
-    """Save messages to JSON file"""
-    with open(MESSAGES_FILE, "w") as f:
-        json.dump(messages, f, indent=2)
-
 def send_email_notification(contact: ContactMessage, message_id: int):
     """
     Send email notification when new message is received
-    
-    SENDERS: Anyone can send you a message
-    RECEIVER: You receive the email at RECEIVER_EMAIL
-    SMTP_SENDER: Gmail account used to send the notification email
-    
-    Flow: Visitor sends message -> Saved -> Email sent to YOUR inbox
     """
     try:
         # Email configuration
-        smtp_sender = os.getenv("SENDER_EMAIL")  # Gmail account for SMTP
-        smtp_password = os.getenv("SENDER_PASSWORD")  # App Password
-        your_email = os.getenv("RECEIVER_EMAIL")  # YOUR email where you receive notifications
+        smtp_sender = os.getenv("SENDER_EMAIL")
+        smtp_password = os.getenv("SENDER_PASSWORD")
+        your_email = os.getenv("RECEIVER_EMAIL")
+        
+        print(f"📧 Email config check:")
+        print(f"   SENDER_EMAIL: {smtp_sender}")
+        print(f"   RECEIVER_EMAIL: {your_email}")
         
         # Check if credentials are set
         if not smtp_sender or not smtp_password:
-            print("⚠️ Warning: Email credentials not configured. Email will not be sent.")
-            print("Set SENDER_EMAIL and SENDER_PASSWORD in .env file")
+            print("❌ Email credentials not configured!")
             return False
         
         if not your_email:
-            your_email = smtp_sender  # Use sender email as fallback
-            print(f"⚠️ RECEIVER_EMAIL not set, using SENDER_EMAIL: {your_email}")
+            your_email = smtp_sender
         
         # Create email message
         message = MIMEMultipart("alternative")
@@ -79,7 +68,7 @@ def send_email_notification(contact: ContactMessage, message_id: int):
         message["From"] = smtp_sender
         message["To"] = your_email
         
-        # HTML body for better formatting
+        # HTML body
         html_body = f"""
         <html>
             <body style="font-family: 'Courier Prime', monospace; background-color: #000; color: #10b981; padding: 20px;">
@@ -138,7 +127,7 @@ To reply, email: {contact.email}
         message.attach(MIMEText(html_body, "html"))
         
         # Send email via Gmail SMTP
-        print(f"📧 Sending email notification to {your_email}...")
+        print(f"📧 Sending email to {your_email}...")
         server = smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10)
         server.login(smtp_sender, smtp_password)
         server.sendmail(smtp_sender, your_email, message.as_string())
@@ -147,14 +136,14 @@ To reply, email: {contact.email}
         print(f"✅ Email sent successfully to {your_email}!")
         return True
         
-    except smtplib.SMTPAuthenticationError:
-        print(f"❌ Email Error: SMTP authentication failed. Check SENDER_EMAIL and SENDER_PASSWORD in .env")
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"❌ SMTP Auth Error: {str(e)}")
         return False
     except smtplib.SMTPException as e:
-        print(f"❌ Email Error: {str(e)}")
+        print(f"❌ SMTP Error: {str(e)}")
         return False
     except Exception as e:
-        print(f"❌ Email Error: {str(e)}")
+        print(f"❌ General Error: {str(e)}")
         return False
 
 @app.get("/")
@@ -164,9 +153,6 @@ def read_root():
         "endpoints": {
             "post_message": "/api/contact",
             "get_all_messages": "/api/messages",
-            "get_single_message": "/api/messages/{message_id}",
-            "mark_as_read": "/api/messages/{message_id}/read",
-            "delete_message": "/api/messages/{message_id}"
         }
     }
 
@@ -175,13 +161,23 @@ def send_contact_message(contact: ContactMessage):
     """
     Receive contact message from portfolio and send email notification
     """
+    global message_counter
+    
     try:
-        # Load existing messages
-        messages = load_messages()
+        print(f"\n{'='*60}")
+        print(f"📨 New Contact Message Received")
+        print(f"{'='*60}")
+        print(f"Name: {contact.name}")
+        print(f"Email: {contact.email}")
+        print(f"Message: {contact.message}")
+        
+        # Increment counter for message ID
+        message_counter += 1
+        message_id = message_counter
         
         # Create new message object
         new_message = {
-            "id": len(messages) + 1,
+            "id": message_id,
             "name": contact.name,
             "email": contact.email,
             "message": contact.message,
@@ -189,14 +185,12 @@ def send_contact_message(contact: ContactMessage):
             "read": False
         }
         
-        # Add to messages
-        messages.append(new_message)
-        
-        # Save to file
-        save_messages(messages)
+        # Store in memory
+        messages_db.append(new_message)
+        print(f"✅ Message stored in memory (total: {len(messages_db)})")
         
         # Send email notification
-        email_sent = send_email_notification(contact, new_message["id"])
+        email_sent = send_email_notification(contact, message_id)
         
         return {
             "status": "success",
@@ -205,19 +199,19 @@ def send_contact_message(contact: ContactMessage):
             "data": new_message
         }
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"\n❌ ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/messages")
 def get_all_messages():
     """
-    Get all messages
+    Get all messages from memory
     """
-    messages = load_messages()
     return {
-        "total": len(messages),
-        "unread": len([m for m in messages if not m["read"]]),
-        "messages": messages
+        "total": len(messages_db),
+        "messages": messages_db
     }
 
 @app.get("/api/messages/{message_id}")
@@ -225,36 +219,9 @@ def get_message(message_id: int):
     """
     Get specific message by ID
     """
-    messages = load_messages()
-    for msg in messages:
+    for msg in messages_db:
         if msg["id"] == message_id:
             return msg
-    raise HTTPException(status_code=404, detail="Message not found")
-
-@app.put("/api/messages/{message_id}/read")
-def mark_as_read(message_id: int):
-    """
-    Mark message as read
-    """
-    messages = load_messages()
-    for msg in messages:
-        if msg["id"] == message_id:
-            msg["read"] = True
-            save_messages(messages)
-            return {"status": "success", "message": "Message marked as read"}
-    raise HTTPException(status_code=404, detail="Message not found")
-
-@app.delete("/api/messages/{message_id}")
-def delete_message(message_id: int):
-    """
-    Delete a message
-    """
-    messages = load_messages()
-    for i, msg in enumerate(messages):
-        if msg["id"] == message_id:
-            messages.pop(i)
-            save_messages(messages)
-            return {"status": "success", "message": "Message deleted"}
     raise HTTPException(status_code=404, detail="Message not found")
 
 if __name__ == "__main__":
@@ -266,8 +233,7 @@ if __name__ == "__main__":
     if os.getenv("SENDER_EMAIL") and os.getenv("SENDER_PASSWORD"):
         print("✅ Email notifications: ENABLED")
     else:
-        print("⚠️ Email notifications: DISABLED (configure .env file)")
+        print("⚠️ Email notifications: DISABLED")
     print("\n📡 Server running on http://0.0.0.0:8000")
-    print("📚 API Documentation: http://localhost:8000/docs")
     print("="*60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=8000)
